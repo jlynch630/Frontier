@@ -1,8 +1,10 @@
 ﻿namespace PioneerApi {
 	using System;
 	using System.Collections.Generic;
+	using System.IO;
 	using System.Linq;
 	using System.Text;
+	using System.Threading.Tasks;
 
 	public class ISCPPacket {
 		private const string HeaderMagic = "ISCP";
@@ -16,23 +18,31 @@
 
 		public int Size => ISCPPacket.HeaderSize + this.Message.Size;
 
-		public static ISCPPacket Read(byte[] data, int initialOffset) {
+		public static async Task<ISCPPacket> Read(Stream dataStream) {
 			// ensure header matches
-			int Offset = initialOffset;
-			for (; Offset < initialOffset + ISCPPacket.HeaderMagic.Length; Offset++)
-				if (data[Offset] != ISCPPacket.HeaderMagic[Offset - initialOffset])
-					return null;
+			while (dataStream.ReadByte() != ISCPPacket.HeaderMagic[0]) {
+			}
+
+			for (int i = 1; i < 4; i++) {
+				// if the header doesn't end up matching all the way, read again
+				if (dataStream.ReadByte() != ISCPPacket.HeaderMagic[i])
+					return await ISCPPacket.Read(dataStream);
+			}
 
 			// check the header size
-			int HeaderSize = ISCPPacket.ReadInt(data, ref Offset);
-			int DataSize = ISCPPacket.ReadInt(data, ref Offset);
-			Offset += 4;
+			int HeaderSize = await ISCPPacket.ReadInt(dataStream);
+			int DataSize = await ISCPPacket.ReadInt(dataStream);
+			byte Version = (byte)dataStream.ReadByte();
+
+			// skip reserved bytes
+			for (int i = 0; i < 3; i++)
+				dataStream.ReadByte();
 
 			// rest is all data bytes
-			ISCPMessage Message = ISCPMessage.Read(data, Offset);
-			if (Message == null) return null;
+			ISCPMessage Message = ISCPMessage.Read(dataStream);
 
-			return new ISCPPacket(Message);
+			// if it failed, try again
+			return Message == null ? await ISCPPacket.Read(dataStream) : new ISCPPacket(Message);
 		}
 
 		public byte[] Serialize() {
@@ -67,11 +77,13 @@
 			return offset + IntBytes.Length;
 		}
 
-		private static int ReadInt(byte[] buffer, ref int offset) {
-			IEnumerable<byte> IntBytes = buffer.Skip(offset).Take(4);
-			if (BitConverter.IsLittleEndian) IntBytes = IntBytes.Reverse();
-			offset += 4;
-			return BitConverter.ToInt32(IntBytes.ToArray(), 0);
+		private static async Task<int> ReadInt(Stream dataStream) {
+			byte[] IntBytes = new byte[4];
+			int Read = await dataStream.ReadAsync(IntBytes, 0, 4);
+			if (Read != 4) return -1;
+
+			if (BitConverter.IsLittleEndian) IntBytes = IntBytes.Reverse().ToArray();
+			return BitConverter.ToInt32(IntBytes, 0);
 		}
 	}
 }
